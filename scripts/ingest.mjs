@@ -6,30 +6,51 @@
 //   3. Hydrate details in batches of 50 via videos.list (1 unit / 50 videos)
 //   4. Upsert into `videos`, skipping non-embeddable ones, level = channel level_prior
 //
-// Quota math: a few hundred channels ≈ a few hundred units against a 10,000/day cap.
+// Usage:  npm run ingest            (nightly: newest 50 uploads per channel)
+//         npm run ingest -- --full  (first run / backfill: entire uploads playlist)
 //
-// Usage:  YOUTUBE_API_KEY=... SUPABASE_SERVICE_ROLE_KEY=... NEXT_PUBLIC_SUPABASE_URL=... \
-//         node scripts/ingest.mjs [--full]
-//
-//   default: fetch only the newest 50 uploads per channel (nightly mode)
-//   --full : walk the entire uploads playlist (first run / backfill)
+// Env is read from .env.local / .env automatically (plain Node doesn't do this
+// on its own — only Next.js does), or from real environment variables (CI).
 
 import { createClient } from "@supabase/supabase-js";
+import { readFileSync, existsSync } from "node:fs";
+
+// ---- minimal .env loader: real environment variables always win ----
+for (const file of [".env.local", ".env"]) {
+  if (!existsSync(file)) continue;
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+    if (!m || line.trim().startsWith("#")) continue;
+    const key = m[1];
+    let val = m[2];
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = val;
+  }
+}
+// --------------------------------------------------------------------
 
 const YT = "https://www.googleapis.com/youtube/v3";
 const KEY = process.env.YOUTUBE_API_KEY;
 const FULL = process.argv.includes("--full");
+
+if (!KEY || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  console.error("Missing env. Needed: YOUTUBE_API_KEY, SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SUPABASE_URL");
+  console.error("Present:", {
+    YOUTUBE_API_KEY: !!KEY,
+    SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+  });
+  console.error("Run from the project root (the folder containing .env.local).");
+  process.exit(1);
+}
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } }
 );
-
-if (!KEY || !process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
-  console.error("Missing env: YOUTUBE_API_KEY, SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_SUPABASE_URL");
-  process.exit(1);
-}
 
 async function yt(endpoint, params) {
   const url = new URL(`${YT}/${endpoint}`);
@@ -59,7 +80,7 @@ async function resolveChannel(ch) {
   const data = await yt("channels", { part: "id,snippet", forHandle: ch.handle.replace(/^@/, "") });
   const found = data.items?.[0];
   if (!found) {
-    console.warn(`  !! could not resolve handle ${ch.handle} — check it exists, skipping`);
+    console.warn(`  !! could not resolve handle ${ch.handle} — check youtube.com/${ch.handle} exists, skipping`);
     return null;
   }
   // re-key the row to the real channel ID
