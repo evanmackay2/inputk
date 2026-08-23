@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { DemoClock } from "@/components/DemoClock";
+import { totalHoursFor } from "@/lib/roadmap";
 import type { Language } from "@/lib/types";
 
 export default async function Home() {
@@ -31,12 +31,6 @@ export default async function Home() {
           Comprehensible input works when you watch a lot of it, at your level.
           inputtv tunes YouTube to where you are — and keeps the clock running.
         </p>
-        <div className="mt-10">
-          <DemoClock />
-          <p className="mt-2 font-mono text-xs tracking-widest text-dust/70">
-            HOURS · MIN · SEC OF INPUT
-          </p>
-        </div>
       </section>
 
       <section className="mt-20">
@@ -49,10 +43,10 @@ export default async function Home() {
               className="card flex items-center gap-3 px-5 py-4"
             >
               <span className="text-2xl">{l.flag}</span>
-              <div>
+              <div className="min-w-0">
                 <div className="font-medium">{l.name}</div>
                 <div className="font-mono text-[10px] tracking-widest text-dust uppercase">
-                  ch·{l.code}
+                  ~{totalHoursFor(l.code).toLocaleString()} hrs to fluency
                 </div>
               </div>
             </Link>
@@ -64,6 +58,11 @@ export default async function Home() {
             </p>
           )}
         </div>
+        <p className="mt-4 max-w-xl text-xs text-dust">
+          Rough estimates for hours of understandable listening, assuming you start from
+          English. Languages closer to ones you already speak go faster; each language's
+          full milestone roadmap lives on its stats page.
+        </p>
       </section>
     </main>
   );
