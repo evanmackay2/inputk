@@ -116,6 +116,39 @@ async function listUploads(channelId) {
   return ids;
 }
 
+
+// ---- category classifier ----------------------------------------------------
+// Kept in sync by hand with src/lib/categories.ts (the UI taxonomy).
+// If you add a category there, add its keywords here too.
+const CATEGORY_KEYWORDS = {
+  "stories": ["story","stories","tale","cuento","historia de","leyenda","fábula","história","conto","storia","racconto","fiaba","histoire","conte","geschichte","märchen","物語","昔話","ストーリー"],
+  "daily-life": ["daily","routine","vlog","my day","rutina","día a día","vida diaria","cotidiano","rotina","meu dia","quotidiano","giornata","quotidien","ma journée","alltag","日常","ルーティン"],
+  "culture": ["culture","tradition","festival","cultura","tradición","costumbres","tradição","tradizione","coutume","kultur","文化","伝統","祭り","holiday","navidad","natal","natale","noël","weihnachten"],
+  "travel": ["travel","trip","viaje","viajar","viagem","viaggio","voyage","reise","旅行","旅","walking tour","ciudad","cidade","città","ville","stadt","pueblo","barrio"],
+  "food": ["food","cook","recipe","comida","cocina","receta","culinária","receita","cozinha","cibo","cucina","ricetta","cuisine","recette","essen","kochen","rezept","料理","食べ","レシピ","restaurant"],
+  "history": ["history","historia de","história do","storia di","histoire de","geschichte","歴史","ancient","antigua","antiga","antica","empire","imperio","império","impero","guerra","revolución","revolution"],
+  "science-tech": ["science","ciencia","ciência","scienza","wissenschaft","科学","technology","tecnología","tecnologia","technologie","技術","space","espacio","espaço","spazio","espace","宇宙","biology","física","physik","inteligencia artificial"],
+  "news": ["news","noticias","notícias","notizie","actualité","nachrichten","ニュース","this week","esta semana","questa settimana","cette semaine","aktuell","current events"],
+  "sports": ["sport","deporte","esporte","fútbol","futebol","calcio","football","fußball","サッカー","スポーツ","basketball","tennis","olympi","béisbol","boxeo","workout","entrenamiento"],
+  "music-arts": ["music","música","musica","musique","musik","音楽","song","canción","canção","canzone","chanson","lied","art ","arte","kunst","芸術","painting","pintura","cinema","cine","película","filme","film"],
+  "games": ["game","gaming","videojuego","video game","jogo","videogioco","jeu vidéo","videospiel","ゲーム","minecraft","pokemon","pokémon","nintendo","playstation","juego de mesa","board game"],
+  "language": ["grammar","gramática","grammatica","grammaire","grammatik","文法","vocabulary","vocabulario","vocabulário","vocabolario","vocabulaire","wortschatz","単語","pronunciation","pronunciación","pronúncia","pronuncia","prononciation","aussprache","発音","verbos","conjuga","subjuntivo","expresiones","expressões","slang","jerga"],
+};
+
+function classify(title, description) {
+  const text = `${title}\n${(description ?? "").slice(0, 600)}`.toLowerCase();
+  const scored = [];
+  for (const [id, kws] of Object.entries(CATEGORY_KEYWORDS)) {
+    let hits = 0;
+    for (const kw of kws) if (text.includes(kw)) hits++;
+    if (hits > 0) scored.push({ id, hits });
+  }
+  if (!scored.length) return ["general"];
+  scored.sort((a, b) => b.hits - a.hits);
+  return scored.slice(0, 3).map((s) => s.id);
+}
+// -----------------------------------------------------------------------------
+
 async function hydrate(ids, ch) {
   const rows = [];
   for (let i = 0; i < ids.length; i += 50) {
@@ -145,6 +178,7 @@ async function hydrate(ids, ch) {
         view_count: +(v.statistics?.viewCount ?? 0),
         level: Math.min(7, Math.max(1, Math.round(ch.level_prior ?? 4))),
         level_confidence: 0.3,                  // channel-prior heuristic
+        categories: classify(v.snippet.title, v.snippet.description),
         metadata_refreshed_at: new Date().toISOString(),
       });
     }

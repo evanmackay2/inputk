@@ -3,8 +3,9 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { LevelPicker } from "@/components/LevelPicker";
 import { VideoCard } from "@/components/VideoCard";
-import { LevelBadge } from "@/components/LevelBadge";
+import { InterestsEditor } from "@/components/InterestsEditor";
 import { fmtClock, LEVELS } from "@/lib/levels";
+import { ALL_CATEGORIES, categoryById } from "@/lib/categories";
 import type { Language, Profile, Video } from "@/lib/types";
 
 export default async function FeedPage({
@@ -12,7 +13,7 @@ export default async function FeedPage({
   searchParams,
 }: {
   params: { lang: string };
-  searchParams: { level?: string };
+  searchParams: { level?: string; cat?: string };
 }) {
   const supabase = createClient();
 
@@ -37,28 +38,40 @@ export default async function FeedPage({
       </main>
     );
   }
-  const profile = profileRow as Profile;
+  const profile = profileRow as Profile & { interests: string[] };
+  const interests: string[] = profile.interests ?? [];
 
   // level filter: explicit ?level= pin, else a band around the user's level
   const pinned = searchParams.level ? parseInt(searchParams.level) : null;
   const lo = pinned ?? Math.max(1, profile.current_level - 1);
   const hi = pinned ?? Math.min(7, profile.current_level + 1);
 
-  const { data: videos } = await supabase
+  // category filter: explicit ?cat= pin overrides interests
+  const cat = searchParams.cat ?? null;
+
+  let query = supabase
     .from("videos")
-    .select("id, channel_id, language_code, title, channel_name, duration_seconds, published_at, thumbnail_url, view_count, level")
+    .select("id, channel_id, language_code, title, channel_name, duration_seconds, published_at, thumbnail_url, view_count, level, categories")
     .eq("language_code", params.lang)
     .eq("embeddable", true)
     .eq("available", true)
     .gte("level", lo)
-    .lte("level", hi)
+    .lte("level", hi);
+
+  if (cat) {
+    query = query.contains("categories", [cat]);
+  } else if (interests.length) {
+    query = query.overlaps("categories", interests);
+  }
+
+  const { data: videos } = await query
     .order("published_at", { ascending: false })
     .limit(48);
 
-  // channel diversity: cap consecutive videos per channel in the render order
-  const feed: Video[] = [];
-  const byChannel = new Map<string, Video[]>();
-  for (const v of (videos as Video[] | null) ?? []) {
+  // channel diversity: interleave so one channel can't dominate the page
+  const feed: (Video & { categories: string[] })[] = [];
+  const byChannel = new Map<string, (Video & { categories: string[] })[]>();
+  for (const v of (videos as (Video & { categories: string[] })[] | null) ?? []) {
     const arr = byChannel.get(v.channel_id) ?? [];
     arr.push(v);
     byChannel.set(v.channel_id, arr);
@@ -70,6 +83,17 @@ export default async function FeedPage({
       if (v) feed.push(v);
     }
   }
+
+  const levelHref = (n?: number) =>
+    `/learn/${language.code}?${new URLSearchParams({
+      ...(n ? { level: String(n) } : {}),
+      ...(cat ? { cat } : {}),
+    }).toString()}`;
+  const catHref = (id?: string) =>
+    `/learn/${language.code}?${new URLSearchParams({
+      ...(pinned ? { level: String(pinned) } : {}),
+      ...(id ? { cat: id } : {}),
+    }).toString()}`;
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-8">
@@ -94,21 +118,45 @@ export default async function FeedPage({
 
       <nav className="mt-6 flex flex-wrap items-center gap-2">
         <Link
-          href={`/learn/${language.code}`}
+          href={levelHref()}
           className={`btn text-xs ${!pinned ? "bg-lamp text-ink" : "btn-ghost"}`}
         >
-          My band · L{lo}–L{hi === lo ? hi : Math.min(7, profile.current_level + 1)}
+          My band · L{Math.max(1, profile.current_level - 1)}–L{Math.min(7, profile.current_level + 1)}
         </Link>
         {LEVELS.map((l) => (
           <Link
             key={l.n}
-            href={`/learn/${language.code}?level=${l.n}`}
+            href={levelHref(l.n)}
             className={`btn text-xs ${pinned === l.n ? "bg-lamp text-ink" : "btn-ghost"}`}
           >
             L{l.n}
           </Link>
         ))}
       </nav>
+
+      <nav className="mt-3 flex flex-wrap items-center gap-2">
+        <Link
+          href={catHref()}
+          className={`rounded-full border px-3 py-1 text-xs ${
+            !cat ? "border-lamp bg-lamp/15 text-lamp" : "border-line text-dust hover:text-cream"
+          }`}
+        >
+          {interests.length ? "★ For you" : "All"}
+        </Link>
+        {ALL_CATEGORIES.map((c) => (
+          <Link
+            key={c.id}
+            href={catHref(c.id)}
+            className={`rounded-full border px-3 py-1 text-xs ${
+              cat === c.id ? "border-lamp bg-lamp/15 text-lamp" : "border-line text-dust hover:text-cream"
+            }`}
+          >
+            {c.emoji} {c.label}
+          </Link>
+        ))}
+      </nav>
+
+      <InterestsEditor langCode={language.code} interests={interests} />
 
       {feed.length ? (
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -118,11 +166,12 @@ export default async function FeedPage({
         </div>
       ) : (
         <div className="mt-16 text-center text-dust">
-          <p>Nothing on air at this level yet.</p>
+          <p>
+            Nothing on air {cat ? `in ${categoryById(cat).label}` : interests.length ? "for your interests" : ""} at this level.
+          </p>
           <p className="mt-2 text-sm">
-            Add {language.name} channels to <code className="text-lamp">channels</code> and run{" "}
-            <code className="text-lamp">npm run ingest -- --full</code>, or try another level:{" "}
-            <LevelBadge level={Math.min(7, profile.current_level + 1)} />
+            Try another level or category — or if the whole catalog looks thin, re-run{" "}
+            <code className="text-lamp">npm run ingest -- --full</code> so existing videos get categorized.
           </p>
         </div>
       )}
