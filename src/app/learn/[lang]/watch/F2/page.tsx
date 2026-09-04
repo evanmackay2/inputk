@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Player } from "@/components/Player";
 import { LevelBadge } from "@/components/LevelBadge";
+import { Reader } from "@/components/Reader";
 import { fmtDuration } from "@/lib/levels";
 
 export default async function WatchPage({
@@ -63,6 +64,8 @@ export default async function WatchPage({
           </p>
         )}
       </div>
+
+      <Reader videoId={video.id} langCode={params.lang} />
     </main>
   );
 }

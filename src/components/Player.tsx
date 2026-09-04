@@ -14,34 +14,46 @@ const POLL_MS = 1000;
 const FLUSH_MS = 10_000;
 
 /**
- * Embeds the YouTube IFrame player and reports watch time.
- *
- * Time only accrues while player state === PLAYING, per-tick deltas are clamped
- * (so seeking never inflates the counter), and the server re-validates every
- * heartbeat against wall-clock elapsed time. sendBeacon covers tab closes.
+ * YouTube IFrame player with validated watch-time tracking, plus:
+ *  - broadcasts playback time as 'inputtv:time' events (the Reader listens)
+ *  - listens for 'inputtv:seek' events (Reader timestamps jump the video)
+ *  - shrinks into a corner mini-player when scrolled out of view
  */
 export function Player({
   videoId,
   baseSeconds,
 }: {
   videoId: string;
-  baseSeconds: number; // profile total at page load, for the live clock
+  baseSeconds: number;
 }) {
   const playerRef = useRef<any>(null);
   const sessionRef = useRef<string | null>(null);
-  const acc = useRef(0);          // seconds accumulated since last flush
-  const lastTime = useRef(0);     // last observed player position
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const acc = useRef(0);
+  const lastTime = useRef(0);
   const maxPos = useRef(0);
   const [live, setLive] = useState(baseSeconds);
   const [playing, setPlaying] = useState(false);
   const [unplayable, setUnplayable] = useState(false);
+  const [pip, setPip] = useState(false);
+
+  // mini-player: watch the anchor's visibility
+  useEffect(() => {
+    const el = anchorRef.current;
+    if (!el || !("IntersectionObserver" in window)) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => setPip(!entry.isIntersecting),
+      { threshold: 0.25 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     let poll: ReturnType<typeof setInterval>;
     let flushTimer: ReturnType<typeof setInterval>;
     let destroyed = false;
 
-    // open a session first so heartbeats have somewhere to land
     fetch("/api/watch/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -84,9 +96,9 @@ export function Player({
               const isPlaying = p.getPlayerState() === 1;
               setPlaying(isPlaying);
               const now = p.getCurrentTime?.() ?? 0;
+              window.dispatchEvent(new CustomEvent("inputtv:time", { detail: now }));
               if (isPlaying) {
                 const delta = now - lastTime.current;
-                // count only plausible forward motion; a seek produces |delta| >> poll interval
                 if (delta > 0 && delta < (POLL_MS / 1000) * 1.8) {
                   acc.current += delta;
                   setLive((v) => v + delta);
@@ -97,7 +109,7 @@ export function Player({
             }, POLL_MS);
             flushTimer = setInterval(() => flush(), FLUSH_MS);
           },
-          onError: () => setUnplayable(true), // embed revoked since ingest
+          onError: () => setUnplayable(true),
         },
       });
     }
@@ -114,8 +126,13 @@ export function Player({
 
     const onHide = () => { if (document.hidden) flush(true); };
     const onPageHide = () => flush(true);
+    const onSeek = (e: Event) => {
+      const t = (e as CustomEvent<number>).detail;
+      playerRef.current?.seekTo?.(t, true);
+    };
     document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("inputtv:seek", onSeek);
 
     return () => {
       destroyed = true;
@@ -124,6 +141,7 @@ export function Player({
       clearInterval(flushTimer);
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("inputtv:seek", onSeek);
       playerRef.current?.destroy?.();
     };
   }, [videoId]);
@@ -148,9 +166,18 @@ export function Player({
 
   return (
     <div>
-      <div className="overflow-hidden rounded-xl border border-line bg-black">
-        <div className="aspect-video">
-          <div id="yt-player" className="h-full w-full" />
+      {/* anchor keeps layout space; the frame floats out of it in pip mode */}
+      <div ref={anchorRef} className="aspect-video">
+        <div
+          className={
+            pip
+              ? "fixed bottom-4 right-4 z-50 w-72 sm:w-80 overflow-hidden rounded-xl border border-line bg-black shadow-2xl"
+              : "h-full w-full overflow-hidden rounded-xl border border-line bg-black"
+          }
+        >
+          <div className="aspect-video">
+            <div id="yt-player" className="h-full w-full" />
+          </div>
         </div>
       </div>
       <div className="mt-3 flex items-center gap-3">
